@@ -10,22 +10,31 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI()
+app = FastAPI(title="Accela V_RECORD API", version="1.0.0")
 security = HTTPBasic()
 
-USERNAME = os.getenv("API_USER")
-PASSWORD = os.getenv("API_PASS")
+USERNAME = os.getenv("API_USER", "admin")
+PASSWORD = os.getenv("API_PASS", "admin123")
 
-# Database connection
-conn = pyodbc.connect(
-    f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-    f"SERVER={os.getenv('SQL_SERVER')};"
-    f"DATABASE={os.getenv('SQL_DB')};"
-    f"UID={os.getenv('SQL_USER')};"
-    f"PWD={os.getenv('SQL_PASS')}"
-)
+# Root path for health check
+@app.get("/")
+def read_root():
+    return {"message": "Accela API is live. Go to /docs for Swagger UI."}
 
-# Pydantic model
+# Try to create DB connection
+try:
+    conn = pyodbc.connect(
+        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+        f"SERVER={os.getenv('SQL_SERVER')};"
+        f"DATABASE={os.getenv('SQL_DB')};"
+        f"UID={os.getenv('SQL_USER')};"
+        f"PWD={os.getenv('SQL_PASS')}"
+    )
+except Exception as e:
+    print("Database connection failed:", str(e))
+    conn = None  # prevent crashing on import if DB is unavailable
+
+
 class Permit(BaseModel):
     AGENCY_ID: str
     RECORD_ID: Optional[str]
@@ -87,18 +96,21 @@ class Permit(BaseModel):
     T_ID3: str
     STREET_NBR_ALPHA_HASH: Optional[str]
 
-# Authentication
+
 def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
     if not (secrets.compare_digest(credentials.username, USERNAME) and
             secrets.compare_digest(credentials.password, PASSWORD)):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-# GET /permits endpoint
+
 @app.get("/permits", response_model=List[Permit])
 def get_permits(
     credentials: HTTPBasicCredentials = Depends(authenticate),
     limit: int = Query(100, le=1000)
 ):
+    if conn is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
     cursor = conn.cursor()
     cursor.execute(f"""
         SELECT TOP {limit}
